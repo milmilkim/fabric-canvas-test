@@ -36,7 +36,8 @@ function App() {
 
   function saveState() {
     const json = fabricRef.current?.toJSON();
-    console.log(json);
+    window.localStorage.setItem('json', JSON.stringify(json));
+    alert('저장되었따')
   }
 
   const [dimensions, setDimensions] = useState<Dimensions>({
@@ -136,6 +137,14 @@ function App() {
         width: 800,
         height: 1000,
       });
+
+      const json = window.localStorage.getItem('json');
+      const parsedJson = json ? JSON.parse(json) : null;
+      if (parsedJson && typeof parsedJson === 'object') {
+        fabricRef.current.loadFromJSON(parsedJson, () => {
+          fabricRef.current?.renderAll();
+        });
+      }
     };
 
     const disposeFabric = () => {
@@ -203,8 +212,8 @@ function App() {
           ref={canvasRef}></canvas>
       </div>
 
-      <Button className='mt-3 ml-2' onClick={saveState} variant='secondary'>
-        추출
+      <Button className='mt-3 ml-2' onClick={saveState} variant='default'>
+        저장
       </Button>
     </>
   );
