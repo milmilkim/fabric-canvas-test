@@ -63,6 +63,19 @@ function Editor() {
     alert('저장되었따');
   }
 
+  const saveImage = () => {
+    const dataUrl = fabricRef.current?.toDataURL();
+
+	if(!dataUrl) return;
+    const link = document.createElement('a');
+    link.href = dataUrl;
+
+    link.download = 'download-image';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const jsonToImage = async (json: FabricJson): Promise<string> => {
     return new Promise((resolve) => {
       const tempCanvas = new fabric.Canvas(null);
@@ -194,7 +207,7 @@ function Editor() {
   const undo = () => {
     if (history.length > 1) {
       changeState(history[history.length - 2]);
-    } 
+    }
   };
 
   const saveHistory = () => {
@@ -332,7 +345,9 @@ function Editor() {
         <Button onClick={saveState} variant='outline'>
           저장
         </Button>
-        <Button variant='default'>이미지 저장</Button>
+        <Button onClick={saveImage} variant='default'>
+          이미지 저장
+        </Button>
       </div>
 
       <div className='overflow-y-auto h-96 bg-slate-300'>
