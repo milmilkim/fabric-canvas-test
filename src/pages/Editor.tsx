@@ -1,8 +1,9 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 import { fabric } from 'fabric';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 
 import { Textarea } from '@/components/ui/textarea';
 import { CirclePicker, ColorResult } from 'react-color';
@@ -14,23 +15,33 @@ interface Dimensions {
   height: number;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type FabricBackgroundImage = any; // 라이브러리에 type이 따로 없는 거 같음..
+
 interface FabricJson {
   version: string;
   objects: fabric.Object[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  backgroundImage: any;
+  backgroundImage: FabricBackgroundImage;
 }
 
 function Editor() {
+  // ---------- DOM Element
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricRef = useRef<fabric.Canvas | null>(null);
 
+  // ----------- state
   const [newText, setNewText] = useState<string>('');
   const [newColor, setNewColor] = useState<string>('black');
-
   const [history, setHistory] = useState<FabricJson[]>([]);
-  const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
 
+  // ---------- ref (동기적)
+  // 실행 취소나, 상태 변경을 하는 경우에는 히스토리가 쌓이며 안 됨 (true이면 히스토리가 쌓이지 않는다)
+  const isHistoryLockedRef = useRef<boolean>(false);
+  // 실행취소를 하기 위한 인덱스
+  const currentIndexRef = useRef<number | null>(null);
+
+  // 캔버스에 텍스트 추가
   const addText = () => {
     const text = new fabric.Textbox(newText, {
       left: 100,
@@ -57,16 +68,50 @@ function Editor() {
     setDimensions(next);
   };
 
-  function saveState() {
+  const saveState = () => {
+    // 로컬스토리지에 현재 캔버스만 저장
     const json = fabricRef.current?.toJSON();
     window.localStorage.setItem('json', JSON.stringify(json));
     alert('저장되었따');
-  }
+  };
 
-  const saveImage = () => {
-    const dataUrl = fabricRef.current?.toDataURL();
+  // 히스토리 추가를 방지하는 용도
+  const lockHistory = () => (isHistoryLockedRef.current = true);
+  const unlockHistory = () => (isHistoryLockedRef.current = false);
 
-	if(!dataUrl) return;
+  const jsonToImage = async (): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      if (!fabricRef.current) {
+        reject('fabricRef.current is not defined.');
+        return;
+      }
+
+      const tempCanvas = new fabric.Canvas(null);
+      tempCanvas.setWidth(dimensions.width);
+      tempCanvas.setHeight(dimensions.height);
+
+      const jsonData = fabricRef.current.toJSON();
+
+      tempCanvas.loadFromJSON(jsonData, () => {
+        if (backgroundImage) {
+          tempCanvas.setBackgroundImage(backgroundImage, () => {
+            tempCanvas.renderAll();
+            resolve(tempCanvas.toDataURL());
+            tempCanvas.dispose();
+          });
+        } else {
+          tempCanvas.renderAll();
+          resolve(tempCanvas.toDataURL());
+          tempCanvas.dispose();
+        }
+      });
+    });
+  };
+
+  const saveImage = async () => {
+    const dataUrl = await jsonToImage();
+
+    if (!dataUrl) return;
     const link = document.createElement('a');
     link.href = dataUrl;
 
@@ -76,61 +121,22 @@ function Editor() {
     document.body.removeChild(link);
   };
 
-  const jsonToImage = async (json: FabricJson): Promise<string> => {
-    return new Promise((resolve) => {
-      const tempCanvas = new fabric.Canvas(null);
+  // 선택된 오브젝트 삭제
+  const deleteActiveObject = () => {
+    const activeObject = fabricRef.current?.getActiveObject();
 
-      tempCanvas.loadFromJSON(json, () => {
-        const boundingRect = tempCanvas.getObjects().reduce(
-          (acc, obj) => {
-            const objBounding = obj.getBoundingRect();
-            return {
-              left: Math.min(acc.left, objBounding.left),
-              top: Math.min(acc.top, objBounding.top),
-              right: Math.max(acc.right, objBounding.left + objBounding.width),
-              bottom: Math.max(
-                acc.bottom,
-                objBounding.top + objBounding.height
-              ),
-            };
-          },
-          {
-            left: Number.POSITIVE_INFINITY,
-            top: Number.POSITIVE_INFINITY,
-            right: Number.NEGATIVE_INFINITY,
-            bottom: Number.NEGATIVE_INFINITY,
-          }
-        );
+    if (activeObject) {
+      fabricRef.current?.remove(activeObject);
+    }
 
-        // 중심점 계산
-        const centerX = (boundingRect.left + boundingRect.right) / 2;
-        const centerY = (boundingRect.top + boundingRect.bottom) / 2;
-
-        // 정사각형의 크기 계산
-        const size = Math.max(
-          boundingRect.right - boundingRect.left,
-          boundingRect.bottom - boundingRect.top
-        );
-
-        // 캔버스 크기 및 뷰포트 설정
-        tempCanvas.setDimensions({ width: size, height: size });
-        tempCanvas.setViewportTransform([
-          1,
-          0,
-          0,
-          1,
-          -centerX + size / 2,
-          -centerY + size / 2,
-        ]);
-
-        // 결과 이미지로 변환
-        const dataUrl = tempCanvas.toDataURL();
-        resolve(dataUrl);
-
-        tempCanvas.dispose();
-      });
-    });
+    fabricRef.current?.renderAll();
   };
+
+  /**
+   *
+   * UI 관련
+   */
+
   const onChangeInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = Number(e.currentTarget.value);
     const name = e.currentTarget.name as 'width' | 'height';
@@ -151,16 +157,6 @@ function Editor() {
     }
   };
 
-  const deleteActiveObject = () => {
-    const activeObject = fabricRef.current?.getActiveObject();
-
-    if (activeObject) {
-      fabricRef.current?.remove(activeObject);
-    }
-
-    fabricRef.current?.renderAll();
-  };
-
   const handleColorChange = (color: ColorResult) => {
     setNewColor(color.hex);
 
@@ -175,17 +171,13 @@ function Editor() {
 
   const setCanvasBackgroundImage = (dataUrl: string) => {
     fabric.Image.fromURL(dataUrl, (img) => {
-      if (fabricRef.current) {
-        fabricRef.current.setWidth(img.width!);
-        fabricRef.current.setHeight(img.height!);
-        fabricRef.current.setBackgroundImage(img, () => {
-          fabricRef.current?.renderAll();
-        });
-      }
+      // 이미지에 맞춘 캔버스 사이즈 변경
+      fabricRef.current?.setWidth(img.width!);
+      fabricRef.current?.setHeight(img.height!);
+      changeSize('width', img.width!);
+      changeSize('height', img.height!);
 
-      fabricRef.current?.setBackgroundImage(img, () => {
-        fabricRef.current?.renderAll();
-      });
+      fabricRef.current?.renderAll();
     });
   };
 
@@ -197,37 +189,66 @@ function Editor() {
 
       reader.onload = (event) => {
         const dataUrl = event.target?.result as string;
+        setBackgroundImage(dataUrl);
         setCanvasBackgroundImage(dataUrl);
       };
 
       reader.readAsDataURL(file);
     }
   };
+  const changeState = useCallback((payload: FabricJson) => {
+    lockHistory();
+
+    fabricRef.current?.loadFromJSON(payload, () => {
+      fabricRef.current?.renderAll();
+      unlockHistory();
+    });
+  }, []);
 
   const undo = () => {
     if (history.length > 1) {
-      changeState(history[history.length - 2]);
+      lockHistory();
+
+      // 초기화
+      if (currentIndexRef.current === null) {
+        currentIndexRef.current = history.length - 1;
+      }
+
+      // 하나 이전 값으로 변경
+      currentIndexRef.current = currentIndexRef.current - 1;
+
+      if (currentIndexRef.current < 0) {
+        currentIndexRef.current = 0;
+        // 히스토리가 아무것도 없어서 다 지움
+        fabricRef.current?.clear();
+        unlockHistory();
+        return;
+      }
+
+      const prevState = history[currentIndexRef.current];
+
+      changeState(prevState);
+
+      unlockHistory();
     }
   };
 
   const saveHistory = () => {
-    // 작업 내역 임시 저장
+    // 히스토리 저장
     if (!fabricRef.current) return;
+    if (isHistoryLockedRef.current) {
+      // 실행 취소나 히스토리 변경일 때는 히스토리를 저장하지 않는다
+      return;
+    }
+    // 여기서부터는 새로운 변경건이라 실행취소 인덱스를 초기화 한다
+    currentIndexRef.current = null;
     const newJson: FabricJson = fabricRef.current?.toJSON() as FabricJson;
     setHistory((prevHistory) => [...prevHistory, newJson]);
   };
 
-  const changeState = (payload: FabricJson) => {
-    fabricRef.current?.loadFromJSON(payload, () => {
-      fabricRef.current?.renderAll();
-    });
-
-    setHistory([]);
-  };
-
   useEffect(() => {
     const initFabric = async () => {
-      // 폰트 로딩 여부 체크
+      // 폰트 로딩 여부 체크 (폰트가 불러온 후 캔버스를 표시해야 폰트가 항상 적용됨)
       const font = new FontFaceObserver('DOSPilgiMedium');
       await font.load();
 
@@ -236,6 +257,7 @@ function Editor() {
         height: 1000,
       });
 
+      // 로컬스토리지에 있는 json 데이터를 불러오기 위한 부분 (임시)
       const json = window.localStorage.getItem('json');
       const parsedJson = json ? JSON.parse(json) : null;
       if (parsedJson && typeof parsedJson === 'object') {
@@ -244,17 +266,11 @@ function Editor() {
         });
       }
 
-      fabricRef.current?.on('object:modified', () => {
-        saveHistory();
-      });
-
-      fabricRef.current?.on('object:added', () => {
-        saveHistory();
-      });
-
-      fabricRef.current?.on('object:removed', () => {
-        saveHistory();
-      });
+      // fabric.js의 이벤트를 추가함
+      // 이벤트 종류 - http://fabricjs.com/events
+      fabricRef.current?.on('object:modified', saveHistory);
+      fabricRef.current?.on('object:added', saveHistory);
+      fabricRef.current?.on('object:removed', saveHistory);
     };
 
     const disposeFabric = () => {
@@ -266,21 +282,35 @@ function Editor() {
     return () => {
       disposeFabric();
       fabricRef.current?.off('object:modified', saveHistory);
+      fabricRef.current?.off('object:added', saveHistory);
+      fabricRef.current?.off('object:removed', saveHistory);
     };
   }, []);
 
   useEffect(() => {
-    const convertLastToJson = async () => {
-      // 히스토리의 마지막 아이템만을 확인
-      const lastItem = history[history.length - 1];
-      if (!lastItem) return;
-
-      const url = await jsonToImage(lastItem);
-      setImageUrls((prevUrls) => [...prevUrls, url]);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl + Z (Cmd + Z for Mac) 를 확인
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        // 활성화된 엘리먼트가 입력 필드가 아닌 경우
+        if (
+          document.activeElement &&
+          document.activeElement.tagName !== 'INPUT' &&
+          document.activeElement.tagName !== 'TEXTAREA'
+        ) {
+          e.preventDefault(); // 기본 동작을 중단
+          undo(); // 실행취소 함수 호출
+        }
+      }
     };
 
-    convertLastToJson();
-  }, [history]);
+    // 이벤트 리스너 추가
+    window.addEventListener('keydown', handleKeyDown);
+
+    // 컴포넌트 언마운트 시 이벤트 리스너 제거
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [undo]);
 
   return (
     <div className='space-y-1'>
@@ -337,7 +367,12 @@ function Editor() {
 
       <div className='flex'>
         <canvas
-          className='border border-gray-700 overflow-scroll'
+          style={{
+            backgroundImage: `url(${backgroundImage})`,
+            backgroundRepeat: 'no-repeat',
+            backgroundSize: 'contain',
+          }}
+          className='border border-gray-700'
           ref={canvasRef}></canvas>
       </div>
 
@@ -361,9 +396,10 @@ function Editor() {
             <div
               onClick={() => changeState(item)}
               key={index}
-              className=' h-20 p-1'>
-              <div className=' w-8 h-8'></div>
-              히스토리 {history.length - 1 - index}
+              className='h-20 p-1'>
+              <div className={'w-full h-8'}>
+                히스토리 {history.length - 1 - index}
+              </div>
             </div>
           ))}
       </div>
