@@ -72,6 +72,10 @@ function Editor() {
     // 로컬스토리지에 현재 캔버스만 저장
     const json = fabricRef.current?.toJSON();
     window.localStorage.setItem('json', JSON.stringify(json));
+
+    // 이미지가 있으면 저장...
+    if (backgroundImage) window.localStorage.setItem('image', backgroundImage);
+
     alert('저장되었따');
   };
 
@@ -87,8 +91,9 @@ function Editor() {
       }
 
       const tempCanvas = new fabric.Canvas(null);
-      tempCanvas.setWidth(dimensions.width);
-      tempCanvas.setHeight(dimensions.height);
+
+      tempCanvas.setWidth(fabricRef.current.width!);
+      tempCanvas.setHeight(fabricRef.current.height!);
 
       const jsonData = fabricRef.current.toJSON();
 
@@ -174,6 +179,7 @@ function Editor() {
       // 이미지에 맞춘 캔버스 사이즈 변경
       fabricRef.current?.setWidth(img.width!);
       fabricRef.current?.setHeight(img.height!);
+      setBackgroundImage(dataUrl);
       changeSize('width', img.width!);
       changeSize('height', img.height!);
 
@@ -189,7 +195,6 @@ function Editor() {
 
       reader.onload = (event) => {
         const dataUrl = event.target?.result as string;
-        setBackgroundImage(dataUrl);
         setCanvasBackgroundImage(dataUrl);
       };
 
@@ -248,13 +253,47 @@ function Editor() {
 
   useEffect(() => {
     const initFabric = async () => {
+      console.log('init...');
+
       // 폰트 로딩 여부 체크 (폰트가 불러온 후 캔버스를 표시해야 폰트가 항상 적용됨)
       const font = new FontFaceObserver('DOSPilgiMedium');
       await font.load();
 
+      // 로컬스토리지에 있는 이미지 데이터를 불러와
+      const url = window.localStorage.getItem('image');
+      let width;
+      let height;
+
+      if (url) {
+        setBackgroundImage(url);
+        const image = new Image();
+
+        // Promise를 사용하여 image가 로드되었는지 확인
+        const loadImage = new Promise((resolve, reject) => {
+          image.onload = () => {
+            width = image.width;
+            height = image.height;
+            setDimensions({ width: image.width, height: image.height });
+            resolve('ok');
+          };
+          image.onerror = (error) => {
+            reject(error);
+          };
+        });
+
+        image.src = url;
+
+        try {
+          await loadImage;
+          // 이미지가 성공적으로 로드된 후의 작업
+        } catch (error) {
+          console.error('이미지 로드 중 오류 발생: ', error);
+        }
+      }
+
       fabricRef.current = new fabric.Canvas(canvasRef.current, {
-        width: 800,
-        height: 1000,
+        width: width || 500,
+        height: height || 500,
       });
 
       // 로컬스토리지에 있는 json 데이터를 불러오기 위한 부분 (임시)
@@ -314,8 +353,11 @@ function Editor() {
 
   return (
     <div className='space-y-1'>
+
+      <p className='mb-1'>테스트용으로 이미지를 로컬스토리지에 저장하기 때문에 너무 크면 저장 안 됨!</p>
       <div className='flex space-x-3 '>
         <Input
+          value={dimensions.width}
           onChange={onChangeInput}
           name='width'
           className='w-36'
@@ -325,6 +367,7 @@ function Editor() {
           max='2000'
         />
         <Input
+          value={dimensions.height}
           onChange={onChangeInput}
           name='height'
           className='w-36'
@@ -365,15 +408,14 @@ function Editor() {
         </div>
       </div>
 
-      <div className='flex'>
-        <canvas
+      <div className='overflow-auto'>
+        <div
           style={{
             backgroundImage: `url(${backgroundImage})`,
             backgroundRepeat: 'no-repeat',
-            backgroundSize: 'contain',
-          }}
-          className='border border-gray-700'
-          ref={canvasRef}></canvas>
+          }}>
+          <canvas className='border border-gray-700 overflow-x-scroll overflow-y-scroll' ref={canvasRef}></canvas>
+        </div>
       </div>
 
       <div className='space-x-1'>
