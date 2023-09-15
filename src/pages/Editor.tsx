@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 import { fabric } from 'fabric';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Textarea } from '@/components/ui/textarea';
 import { CirclePicker, ColorResult } from 'react-color';
@@ -32,14 +32,19 @@ function Editor() {
   // ----------- state
   const [newText, setNewText] = useState<string>('');
   const [newColor, setNewColor] = useState<string>('black');
-  const [history, setHistory] = useState<FabricJson[]>([]);
-  const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
 
   // ---------- ref (동기적)
   // 실행 취소나, 상태 변경을 하는 경우에는 히스토리가 쌓이며 안 됨 (true이면 히스토리가 쌓이지 않는다)
   const isHistoryLockedRef = useRef<boolean>(false);
   // 실행취소를 하기 위한 인덱스
-  const currentIndexRef = useRef<number | null>(null);
+  const currentIndexRef = useRef<number>(-1);
+  // 히스토리
+  const historyRef = useRef<FabricJson[]>([]);
+  // 원본 이미지 사이즈 복원용
+  const originalImgSizeRef = useRef<{ width: number; height: number }>({
+    width: 0,
+    height: 0,
+  });
 
   // 캔버스에 텍스트 추가
   const addText = () => {
@@ -70,51 +75,87 @@ function Editor() {
 
   const saveState = () => {
     // 로컬스토리지에 현재 캔버스만 저장
-    const json = fabricRef.current?.toJSON();
+    const json = fabricRef.current?.toJSON([
+      'selectable',
+      'evented',
+      'left',
+      'top',
+      'scaleX',
+      'scaleY',
+      'width',
+      'height',
+    ]);
     window.localStorage.setItem('json', JSON.stringify(json));
-
-    // 이미지가 있으면 저장...
-    if (backgroundImage) window.localStorage.setItem('image', backgroundImage);
-
     alert('저장되었따');
   };
 
   // 히스토리 추가를 방지하는 용도
-  const lockHistory = () => (isHistoryLockedRef.current = true);
-  const unlockHistory = () => (isHistoryLockedRef.current = false);
+  const lockHistory = () => {
+    isHistoryLockedRef.current = true;
+  };
 
-  const jsonToImage = async (): Promise<string> => {
+  const unlockHistory = () => {
+    isHistoryLockedRef.current = false;
+  };
+
+  const getImage = async (): Promise<string> => {
     return new Promise((resolve, reject) => {
       if (!fabricRef.current) {
         reject('fabricRef.current is not defined.');
         return;
       }
 
+      // 현재 캔버스의 스케일 팩터를 계산
+      const currentScaleFactor =
+        fabricRef.current.width! /
+        (originalImgSizeRef.current.width || fabricRef.current.width!);
+
       const tempCanvas = new fabric.Canvas(null);
 
       tempCanvas.setWidth(fabricRef.current.width!);
       tempCanvas.setHeight(fabricRef.current.height!);
 
-      const jsonData = fabricRef.current.toJSON();
+      const jsonData = fabricRef.current?.toJSON();
 
       tempCanvas.loadFromJSON(jsonData, () => {
-        if (backgroundImage) {
-          tempCanvas.setBackgroundImage(backgroundImage, () => {
-            tempCanvas.renderAll();
-            resolve(tempCanvas.toDataURL());
-            tempCanvas.dispose();
-          });
-        } else {
-          tempCanvas.renderAll();
-          resolve(tempCanvas.toDataURL());
-          tempCanvas.dispose();
-        }
+        // 모든 객체의 위치와 크기 조정
+        tempCanvas.forEachObject(
+          (
+            obj: fabric.Object & {
+              left?: number;
+              top?: number;
+              scaleX?: number;
+              scaleY?: number;
+            }
+          ) => {
+            if (obj.scaleX) obj.scaleX /= currentScaleFactor;
+            if (obj.scaleY) obj.scaleY /= currentScaleFactor;
+            if (obj.left) obj.left /= currentScaleFactor;
+            if (obj.top) obj.top /= currentScaleFactor;
+            obj.setCoords(); // 객체의 좌표를 다시 설정
+          }
+        );
+
+        // 캔버스 크기 변경
+        tempCanvas.setWidth(
+          originalImgSizeRef.current.width || fabricRef.current!.width!
+        );
+        tempCanvas.setHeight(
+          originalImgSizeRef.current.height || fabricRef.current!.height!
+        );
+
+        const url = tempCanvas.toDataURL({
+          format: 'png',
+          quality: 1,
+        });
+
+        resolve(url);
       });
     });
   };
 
   const saveImage = async () => {
-    const dataUrl = await jsonToImage();
+    const dataUrl = await getImage();
 
     if (!dataUrl) return;
     const link = document.createElement('a');
@@ -176,12 +217,24 @@ function Editor() {
 
   const setCanvasBackgroundImage = (dataUrl: string) => {
     fabric.Image.fromURL(dataUrl, (img) => {
-      // 이미지에 맞춘 캔버스 사이즈 변경
-      fabricRef.current?.setWidth(img.width!);
-      fabricRef.current?.setHeight(img.height!);
-      setBackgroundImage(dataUrl);
-      changeSize('width', img.width!);
-      changeSize('height', img.height!);
+      originalImgSizeRef.current.width = img.width!;
+      originalImgSizeRef.current.height = img.height!;
+
+      const canvasWidth = 500; //캔버스 최대 가로폭
+      const scaleFactor = canvasWidth / originalImgSizeRef.current.width;
+      const canvasHeight = originalImgSizeRef.current.height * scaleFactor;
+
+      img.left = 0;
+      img.top = 0;
+      img.scaleX = scaleFactor;
+      img.scaleY = scaleFactor;
+      img.selectable = false;
+      img.evented = false;
+
+      fabricRef.current?.setWidth(canvasWidth);
+      fabricRef.current?.setHeight(canvasHeight);
+      fabricRef.current?.renderAll();
+      fabricRef.current?.add(img);
 
       fabricRef.current?.renderAll();
     });
@@ -201,54 +254,46 @@ function Editor() {
       reader.readAsDataURL(file);
     }
   };
-  const changeState = useCallback((payload: FabricJson) => {
+  const changeState = (payload: FabricJson) => {
     lockHistory();
-
     fabricRef.current?.loadFromJSON(payload, () => {
       fabricRef.current?.renderAll();
       unlockHistory();
     });
-  }, []);
+  };
 
   const undo = () => {
-    if (history.length > 1) {
-      lockHistory();
-
-      // 초기화
-      if (currentIndexRef.current === null) {
-        currentIndexRef.current = history.length - 1;
-      }
-
-      // 하나 이전 값으로 변경
-      currentIndexRef.current = currentIndexRef.current - 1;
-
-      if (currentIndexRef.current < 0) {
-        currentIndexRef.current = 0;
-        // 히스토리가 아무것도 없어서 다 지움
-        fabricRef.current?.clear();
-        unlockHistory();
-        return;
-      }
-
-      const prevState = history[currentIndexRef.current];
-
-      changeState(prevState);
-
-      unlockHistory();
+    // 초기화
+    if (currentIndexRef.current <= 0 || history.length < 1) {
+      return;
     }
+
+    // 하나 이전 값으로 변경
+
+    const prevState = historyRef.current[currentIndexRef.current - 1];
+    currentIndexRef.current = currentIndexRef.current - 1;
+
+    changeState(prevState);
   };
 
   const saveHistory = () => {
     // 히스토리 저장
     if (!fabricRef.current) return;
     if (isHistoryLockedRef.current) {
-      // 실행 취소나 히스토리 변경일 때는 히스토리를 저장하지 않는다
       return;
     }
-    // 여기서부터는 새로운 변경건이라 실행취소 인덱스를 초기화 한다
-    currentIndexRef.current = null;
-    const newJson: FabricJson = fabricRef.current?.toJSON() as FabricJson;
-    setHistory((prevHistory) => [...prevHistory, newJson]);
+
+    const newJson: FabricJson = fabricRef.current?.toJSON([
+      'selectable',
+      'evented',
+      'left',
+      'top',
+      'scaleX',
+      'scaleY',
+    ]) as FabricJson; // 명시적으로 포함해야 하는 항목
+
+    historyRef.current = [...historyRef.current, newJson];
+    currentIndexRef.current = historyRef.current.length - 1;
   };
 
   useEffect(() => {
@@ -259,41 +304,9 @@ function Editor() {
       const font = new FontFaceObserver('DOSPilgiMedium');
       await font.load();
 
-      // 로컬스토리지에 있는 이미지 데이터를 불러와
-      const url = window.localStorage.getItem('image');
-      let width;
-      let height;
-
-      if (url) {
-        setBackgroundImage(url);
-        const image = new Image();
-
-        // Promise를 사용하여 image가 로드되었는지 확인
-        const loadImage = new Promise((resolve, reject) => {
-          image.onload = () => {
-            width = image.width;
-            height = image.height;
-            setDimensions({ width: image.width, height: image.height });
-            resolve('ok');
-          };
-          image.onerror = (error) => {
-            reject(error);
-          };
-        });
-
-        image.src = url;
-
-        try {
-          await loadImage;
-          // 이미지가 성공적으로 로드된 후의 작업
-        } catch (error) {
-          console.error('이미지 로드 중 오류 발생: ', error);
-        }
-      }
-
       fabricRef.current = new fabric.Canvas(canvasRef.current, {
-        width: width || 500,
-        height: height || 500,
+        width: 500,
+        height: 500,
       });
 
       // 로컬스토리지에 있는 json 데이터를 불러오기 위한 부분 (임시)
@@ -301,6 +314,10 @@ function Editor() {
       const parsedJson = json ? JSON.parse(json) : null;
       if (parsedJson && typeof parsedJson === 'object') {
         fabricRef.current.loadFromJSON(parsedJson, () => {
+          if (parsedJson.width && parsedJson.height) {
+            fabricRef.current!.setWidth(parsedJson.width);
+            fabricRef.current!.setHeight(parsedJson.height);
+          }
           fabricRef.current?.renderAll();
         });
       }
@@ -353,8 +370,10 @@ function Editor() {
 
   return (
     <div className='space-y-1'>
-
-      <p className='mb-1'>테스트용으로 이미지를 로컬스토리지에 저장하기 때문에 너무 크면 저장 안 됨!</p>
+      <p className='mb-1'>
+        테스트용으로 이미지를 로컬스토리지에 저장하기 때문에 너무 크면 저장 안
+        됨!
+      </p>
       <div className='flex space-x-3 '>
         <Input
           value={dimensions.width}
@@ -409,12 +428,10 @@ function Editor() {
       </div>
 
       <div className='overflow-auto'>
-        <div
-          style={{
-            backgroundImage: `url(${backgroundImage})`,
-            backgroundRepeat: 'no-repeat',
-          }}>
-          <canvas className='border border-gray-700 overflow-x-scroll overflow-y-scroll' ref={canvasRef}></canvas>
+        <div>
+          <canvas
+            className='border border-gray-700 overflow-x-scroll overflow-y-scroll'
+            ref={canvasRef}></canvas>
         </div>
       </div>
 
@@ -425,25 +442,6 @@ function Editor() {
         <Button onClick={saveImage} variant='default'>
           이미지 저장
         </Button>
-      </div>
-
-      <div className='overflow-y-auto h-96 bg-slate-300'>
-        <h1 className='font-bold p-3'>History</h1>
-        <hr />
-        {/* 최신순 정렬을 위한 reverse */}
-        {history
-          .slice()
-          .reverse()
-          .map((item, index) => (
-            <div
-              onClick={() => changeState(item)}
-              key={index}
-              className='h-20 p-1'>
-              <div className={'w-full h-8'}>
-                히스토리 {history.length - 1 - index}
-              </div>
-            </div>
-          ))}
       </div>
     </div>
   );

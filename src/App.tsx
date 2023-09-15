@@ -2,6 +2,7 @@ import { RouterProvider, createBrowserRouter } from 'react-router-dom';
 import CommonLayout from './components/layout/CommonLayout';
 
 import Editor from './pages/Editor';
+import Konva from './pages/Konva';
 
 const router = createBrowserRouter([
   {
@@ -10,11 +11,15 @@ const router = createBrowserRouter([
     children: [
       {
         path: '',
+        element: <Konva />,
+      },
+      {
+        path: '/fabric',
         element: <Editor />,
       },
       {
-        path: '/editor',
-        element: <Editor />,
+        path: '/konva',
+        element: <Konva />,
       },
     ],
   },
