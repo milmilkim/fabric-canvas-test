@@ -6,3 +6,4 @@
 - tailwind css (https://tailwindcss.com/)
   
 
+https://milmilkim.github.io/fabric-canvas-test/
