@@ -22,7 +22,7 @@ const router = createBrowserRouter(
   ],
   {
     basename:
-      process.env.NODE_ENV === 'production' ? `/fabric-canvas-test/` : '/',
+      process.env.NODE_ENV === 'production' ? `/fabric-canvas-test` : '/',
   }
 );
 
