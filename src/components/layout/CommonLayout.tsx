@@ -5,10 +5,6 @@ const menus = [
     name: 'fabric',
     url: '/fabric',
   },
-  {
-    name: 'konva',
-    url: '/konva',
-  },
 ];
 
 const CommonLayout = () => {
